@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+export DOCKER_HUB_KEY=asd
+export RANCHER_API_KEY=C0A46DF27B39135D5B35
+export RANCHER_API_SECRET=NxSZMeMJTtRQ73jxrnpoLui71YusB2RtE8ithvwY
+export RANCHER_HOST=https://rancher.quikkly.io
+export RANCHER_PROJECT_ID=1a5
+
+go run main.go

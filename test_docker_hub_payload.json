@@ -1,0 +1,25 @@
+{
+  "push_data": {
+    "pushed_at": 1481116300,
+    "images": [],
+    "tag": "1.0.0-SNAPSHOT",
+    "pusher": "phedoreanu"
+  },
+  "callback_url": "https://registry.hub.docker.com/u/phedoreanu/archlinux-python2/hook/2jhj5fiee154g4jabegigehgj5h609ijc/",
+  "repository": {
+    "status": "Active",
+    "description": "",
+    "is_trusted": false,
+    "full_description": null,
+    "repo_url": "https://hub.docker.com/r/phedoreanu/archlinux-python2",
+    "owner": "quikkly",
+    "is_official": false,
+    "is_private": true,
+    "name": "dev_console",
+    "namespace": "quikkly",
+    "star_count": 0,
+    "comment_count": 0,
+    "date_created": 1479818711,
+    "repo_name": "quikkly/dev_console"
+  }
+}
