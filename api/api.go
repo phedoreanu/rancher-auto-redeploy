@@ -49,7 +49,12 @@ func (ra *RancherAPI) redeployHandler(w http.ResponseWriter, r *http.Request, ps
 	log.Printf("Received request for %s", image)
 	imageUUID := "docker:" + image
 
-	s := ra.Services[imageUUID]
+	s, ok := ra.Services[imageUUID]
+	if ok {
+		ra.RefreshService(s)
+	} else {
+		ra.LoadServices()
+	}
 	ra.UpgradeService(s)
 
 	go func() {
@@ -84,8 +89,6 @@ func (ra *RancherAPI) redeployHandler(w http.ResponseWriter, r *http.Request, ps
 
 // UpgradeService calls Rancher's JSON API with the `upgrade` action.
 func (ra *RancherAPI) UpgradeService(s *Service) {
-	ra.RefreshService(s)
-
 	if s.State == "upgraded" {
 		log.Println("Service upgraded, finishing upgrade")
 		ra.FinishUpgradeService(s)
