@@ -11,7 +11,7 @@ func main() {
 	BindPort := flag.Int("port", 8091, "Port to bind for listening for Docker Hub Webhooks.")
 	BindAddress := flag.String("address", "0.0.0.0", "Bind Address to bind for listening for Docker Hub webhooks.")
 
-	redeploy := &api.RancherAPI{
+	autoRedeploy := &api.RancherAPI{
 		Address:      *BindAddress,
 		Port:         *BindPort,
 		Host:         os.Getenv("RANCHER_HOST"),
@@ -20,5 +20,5 @@ func main() {
 		APISecret:    os.Getenv("RANCHER_API_SECRET"),
 		DockerHubKey: os.Getenv("DOCKER_HUB_KEY"),
 	}
-	redeploy.Run()
+	autoRedeploy.Run()
 }

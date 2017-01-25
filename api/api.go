@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/julienschmidt/httprouter"
@@ -20,7 +21,7 @@ type RancherAPI struct {
 }
 
 func (ra *RancherAPI) rootHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	fmt.Fprintln(w, "Welcome Rancher auto-deployer :)")
+	fmt.Fprintln(w, "Welcome to the Rancher auto-deployer!")
 }
 
 func (ra *RancherAPI) redeployHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
@@ -47,11 +48,13 @@ func (ra *RancherAPI) redeployHandler(w http.ResponseWriter, r *http.Request, ps
 	}
 	image := fmt.Sprintf("%s:%s", data.Repository.RepoName, data.PushData.Tag)
 	log.Printf("Received request for %s", image)
-	imageUUID := "docker:" + image
 
-	s, ok := ra.Services[imageUUID]
+	s, ok := ra.Services[data.Repository.RepoName]
 	if ok {
 		ra.RefreshService(s)
+
+		// setting new image & tag from DockerHub payload
+		s.LaunchConfig.ImageUUID = "docker:" + image
 	} else {
 		ra.LoadServices()
 	}
@@ -63,15 +66,14 @@ func (ra *RancherAPI) redeployHandler(w http.ResponseWriter, r *http.Request, ps
 			ra.RefreshService(s)
 
 			if s.State == "upgraded" {
-				ok := ra.FinishUpgradeService(s)
-				if ok {
+				if ra.FinishUpgradeService(s) {
 					break
 				}
 			} else if s.State == "active" {
-				log.Println("Service active")
+				log.Printf("Service %s active", s.ID)
 				break
 			} else {
-				log.Println("Service still upgrading. Retrying in 30 seconds...")
+				log.Printf("Service %s still upgrading. Retrying in 30 seconds...", s.ID)
 				time.Sleep(30 * time.Second)
 			}
 		}
@@ -90,13 +92,12 @@ func (ra *RancherAPI) redeployHandler(w http.ResponseWriter, r *http.Request, ps
 // UpgradeService calls Rancher's JSON API with the `upgrade` action.
 func (ra *RancherAPI) UpgradeService(s *Service) {
 	if s.State == "upgraded" {
-		log.Println("Service upgraded, finishing upgrade")
+		log.Printf("Service %s upgraded, finishing upgrade", s.ID)
 		ra.FinishUpgradeService(s)
 		return
 	}
-
 	if s.State != "active" {
-		log.Println("Service not in active state, canceling upgrade.")
+		log.Printf("Service %s not in active state, canceling upgrade", s.ID)
 		return
 	}
 
@@ -128,6 +129,7 @@ func (ra *RancherAPI) UpgradeService(s *Service) {
 
 // FinishUpgradeService calls Rancher's JSON API with the `finishupgrade` action.
 func (ra *RancherAPI) FinishUpgradeService(s *Service) bool {
+	log.Printf("Finishing %s (%s) upgrade", s.Name, s.ID)
 	payload := []byte(`{}`)
 	req, err := http.NewRequest("POST", s.Actions["finishupgrade"], bytes.NewReader(payload))
 	req.Header.Set("Accept", "application/json")
@@ -137,6 +139,7 @@ func (ra *RancherAPI) FinishUpgradeService(s *Service) bool {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Println(err)
+		return false
 	}
 	defer resp.Body.Close()
 
@@ -150,14 +153,13 @@ func (ra *RancherAPI) FinishUpgradeService(s *Service) bool {
 		log.Printf("Successfully upgraded %s", s.ID)
 		return true
 	}
-
 	log.Println(upgrade)
 	return false
 }
 
 // RefreshService does a GET to Rancher's JSON API for that specific `Service`
 func (ra *RancherAPI) RefreshService(s *Service) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v1/projects/%s/services/%s", ra.Host, ra.ProjectID, s.ID), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v2-beta/projects/%s/services/%s", ra.Host, ra.ProjectID, s.ID), nil)
 	req.SetBasicAuth(ra.APIKey, ra.APISecret)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -173,7 +175,7 @@ func (ra *RancherAPI) RefreshService(s *Service) {
 		log.Println(err)
 	}
 	if s.State != service.State {
-		log.Printf("Service %s changed state from %s to %s", s.ID, s.State, service.State)
+		log.Printf("Service %s changed state from `%s` to `%s`", s.ID, s.State, service.State)
 		s.State = service.State
 		s.Actions = service.Actions
 	}
@@ -181,7 +183,7 @@ func (ra *RancherAPI) RefreshService(s *Service) {
 
 // LoadServices calls Rancher's JSON API for all the services.
 func (ra *RancherAPI) LoadServices() {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v1/projects/%s/services", ra.Host, ra.ProjectID), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v2-beta/projects/%s/services", ra.Host, ra.ProjectID), nil)
 	req.SetBasicAuth(ra.APIKey, ra.APISecret)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -199,26 +201,40 @@ func (ra *RancherAPI) LoadServices() {
 	ra.Services = make(map[string]*Service)
 	ra.LoadBalancers = make(map[string]*Service)
 	for _, s := range services.Data {
-		if s.LaunchConfig.ImageUUID != "" {
-			ra.Services[s.LaunchConfig.ImageUUID] = s
-		} else {
+		switch serviceType := s.Type; serviceType {
+		case "service":
+			ra.Services[splitUUID(s.LaunchConfig.ImageUUID)] = s
+
+			// check for `upgraded` services and finishing the upgrade
+			if s.State == "upgraded" {
+				ra.FinishUpgradeService(s)
+			}
+		case "loadBalancerService":
 			ra.LoadBalancers[s.FQDN] = s
 		}
 	}
-	log.Printf("Loaded %d services from Rancher", len(ra.Services))
-	log.Printf("Loaded %d load-balancers from Rancher", len(ra.LoadBalancers))
+	log.Printf("Loaded %d services", len(ra.Services))
+	log.Printf("Loaded %d loadBalancers", len(ra.LoadBalancers))
+}
+
+func splitUUID(uuid string) string {
+	//"imageUuid": "docker:rancher/convoy-agent:v0.12.0",
+	split := strings.Split(uuid, ":")
+	return split[1]
 }
 
 // Run starts the callback HTTP server and listens on `BindAddress:BindPort`
 func (ra *RancherAPI) Run() {
+	go func() {
+		time.Sleep(20 * time.Second)
+		ra.LoadServices()
+	}()
+
 	router := httprouter.New()
 	router.GET("/", ra.rootHandler)
 	router.POST("/:key", ra.redeployHandler)
-
 	bind := fmt.Sprintf("%s:%d", ra.Address, ra.Port)
-	log.Printf("Listening for docker hub webhooks on %s\n", bind)
 
-	ra.LoadServices()
-
+	log.Printf("Listening for DockerHub webhooks on %s\n", bind)
 	log.Fatal(http.ListenAndServe(bind, router))
 }
