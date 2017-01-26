@@ -70,10 +70,10 @@ func (ra *RancherAPI) redeployHandler(w http.ResponseWriter, r *http.Request, ps
 					break
 				}
 			} else if s.State == "active" {
-				log.Printf("Service %s active", s.ID)
+				log.Printf("Service `%s` (%s) active", s.Name, s.ID)
 				break
 			} else {
-				log.Printf("Service %s still upgrading. Retrying in 30 seconds...", s.ID)
+				log.Printf("Service `%s` (%s) still upgrading. Retrying in 30 seconds...", s.Name, s.ID)
 				time.Sleep(30 * time.Second)
 			}
 		}
@@ -91,13 +91,14 @@ func (ra *RancherAPI) redeployHandler(w http.ResponseWriter, r *http.Request, ps
 
 // UpgradeService calls Rancher's JSON API with the `upgrade` action.
 func (ra *RancherAPI) UpgradeService(s *Service) {
+	log.Printf("Starting `%s` (%s) upgrade", s.Name, s.ID)
 	if s.State == "upgraded" {
-		log.Printf("Service %s upgraded, finishing upgrade", s.ID)
+		log.Printf("Service `%s` (%s) upgraded, finishing upgrade", s.Name, s.ID)
 		ra.FinishUpgradeService(s)
 		return
 	}
 	if s.State != "active" {
-		log.Printf("Service %s not in active state, canceling upgrade", s.ID)
+		log.Printf("Service `%s` (%s) not in active state, canceling upgrade", s.Name, s.ID)
 		return
 	}
 
@@ -121,7 +122,7 @@ func (ra *RancherAPI) UpgradeService(s *Service) {
 		log.Println(err)
 	}
 	if upgrade.State == "upgrading" {
-		log.Printf("Upgrading %s", s.ID)
+		log.Printf("Upgrading `%s` (%s)", s.Name, s.ID)
 	} else {
 		log.Println(upgrade)
 	}
@@ -150,7 +151,7 @@ func (ra *RancherAPI) FinishUpgradeService(s *Service) bool {
 		log.Println(err)
 	}
 	if upgrade.State == "finishing-upgrade" {
-		log.Printf("Successfully upgraded %s", s.ID)
+		log.Printf("Successfully upgraded `%s` (%s)", s.Name, s.ID)
 		return true
 	}
 	log.Println(upgrade)
@@ -175,7 +176,7 @@ func (ra *RancherAPI) RefreshService(s *Service) {
 		log.Println(err)
 	}
 	if s.State != service.State {
-		log.Printf("Service %s changed state from `%s` to `%s`", s.ID, s.State, service.State)
+		log.Printf("Service `%s` (%s) changed state from `%s` to `%s`", s.Name, s.ID, s.State, service.State)
 		s.State = service.State
 		s.Actions = service.Actions
 	}
@@ -200,19 +201,36 @@ func (ra *RancherAPI) LoadServices() {
 
 	ra.Services = make(map[string]*Service)
 	ra.LoadBalancers = make(map[string]*Service)
+	//upgrades := make([]*Service, 0)
 	for _, s := range services.Data {
+		// TODO - temp fix for services without ENV vars
+		if s.LaunchConfig.Environment == nil {
+			s.LaunchConfig.Environment = make(map[string]string)
+		}
+		// TODO - maybe there's a better way?
+		// check for `upgraded` services and finishing the upgrade
+		if s.State == "upgraded" {
+			//upgrades = append(upgrades, s)
+			log.Printf("Found upgraded service `%s` %s", s.Name, s.ID)
+			ra.FinishUpgradeService(s)
+		}
 		switch serviceType := s.Type; serviceType {
 		case "service":
 			ra.Services[splitUUID(s.LaunchConfig.ImageUUID)] = s
-
-			// check for `upgraded` services and finishing the upgrade
-			if s.State == "upgraded" {
-				ra.FinishUpgradeService(s)
-			}
 		case "loadBalancerService":
 			ra.LoadBalancers[s.FQDN] = s
 		}
 	}
+
+	// check for `upgraded` services and finishing the upgrade
+	/*go func() {
+		time.Sleep(20 * time.Second)
+		for _, s := range upgrades {
+			log.Printf("found upgraded service `%s` %s", s.Name, s.ID)
+			ra.FinishUpgradeService(s)
+		}
+	}()*/
+
 	log.Printf("Loaded %d services", len(ra.Services))
 	log.Printf("Loaded %d loadBalancers", len(ra.LoadBalancers))
 }
@@ -225,16 +243,17 @@ func splitUUID(uuid string) string {
 
 // Run starts the callback HTTP server and listens on `BindAddress:BindPort`
 func (ra *RancherAPI) Run() {
-	go func() {
-		time.Sleep(20 * time.Second)
-		ra.LoadServices()
-	}()
-
 	router := httprouter.New()
 	router.GET("/", ra.rootHandler)
 	router.POST("/:key", ra.redeployHandler)
 	bind := fmt.Sprintf("%s:%d", ra.Address, ra.Port)
-
 	log.Printf("Listening for DockerHub webhooks on %s\n", bind)
+
+	// add delay to auto-finish-upgrade
+	go func() {
+		time.Sleep(15 * time.Second)
+		ra.LoadServices()
+	}()
+
 	log.Fatal(http.ListenAndServe(bind, router))
 }
